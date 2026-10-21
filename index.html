@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; media-src 'none'; worker-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>留白交誼廳 · 本機示範原型</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="wiki.css">
+  <script type="module" src="app.mjs"></script>
+</head>
+<body>
+  <a class="skip" href="#draft">跳到輸入框</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="交誼廳資訊">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><div>留白<span>COMMON ROOM</span></div></div>
+      <p class="sidebar-intro">一些發現，<br>從一起聊聊開始。</p>
+      <div class="side-label">我們的房間 <span>01</span></div>
+      <div class="room-selected"><span aria-hidden="true">◧</span><div>窗邊的小桌<small>一個可以慢慢接話的地方</small></div><span class="room-dot"></span></div>
+      <div class="side-label people-label">這張桌的參與者</div>
+      <ul class="people">
+        <li><span class="avatar you">你</span><div>你<small>在自己的節奏裡</small></div><span class="self-label">本人</span></li>
+        <li><span class="avatar yua">葵</span><div>小葵<small>從一張老照片說起</small></div><span class="script-dot" title="示範腳本"></span></li>
+        <li><span class="avatar qing">光</span><div>阿光<small>一起好奇，慢慢求證</small></div><span class="script-dot" title="示範腳本"></span></li>
+      </ul>
+      <p class="people-note">兩位參與者均為合成角色，<br>由本機預寫腳本扮演。</p>
+      <div class="sidebar-bottom">
+        <button class="connection-button" data-open="connections"><span aria-hidden="true">⌘</span><span>模型接線<small>全部尚未連接</small></span><span aria-hidden="true">↗</span></button>
+        <div class="local-note"><span class="tiny-lock" aria-hidden="true">▣</span> 個人內容只留這個瀏覽器<br><span>免費 · 無外部模型 · 無自動過期</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="room-header">
+        <div class="room-heading"><span class="eyebrow">留白交誼廳 <b>本機原型</b></span><h1>窗邊的小桌<span class="open-dot" aria-hidden="true"></span></h1><p>分享發現，讓話題自然長出來。</p></div>
+        <div class="header-actions"><button id="pause" class="quiet-button"><span aria-hidden="true">◷</span> 離席一下</button><button id="open-notebook" class="quiet-button notebook-toggle" aria-label="開啟口袋筆記">口袋筆記 <span id="notebook-count">0</span></button><span class="save-state" id="save-state" role="status">● 本機已保存</span></div>
+      </header>
+      <nav class="view-tabs" aria-label="交誼廳空間"><button id="tab-chat" aria-current="page">對話</button><button id="tab-wiki">共同 Wiki <span>線索，慢慢整理</span></button><button id="open-data-info" class="data-info-link">資料與平台</button></nav>
+      <div id="chat-view" class="chat-view">
+      <section class="demo-bar" aria-label="示範控制">
+        <div><span class="demo-badge">共創合成示範</span><span class="demo-description" id="demo-description">全文預寫，並非即時對話。</span></div>
+        <div class="demo-actions"><button id="start-demo" class="text-button">展開虛構隔天 <span aria-hidden="true">▷</span></button><button id="stop-demo" class="stop-button" disabled><span aria-hidden="true">■</span> 停止示範</button></div>
+      </section>
+      <div class="visibility-note"><span aria-hidden="true">▣</span> 誰看得到：僅這個瀏覽器。每個瀏覽器獨立，沒有多人同步。所有模型未連接，個人內容不上傳。</div>
+      <div id="storage-warning" class="storage-warning" role="alert" hidden></div>
+      <div id="pause-banner" class="pause-banner" hidden><div><strong>先歇一會，也很好。</strong><p id="pause-copy">示範已停止，訊息與草稿會留在這裡。</p></div><button id="resume" class="primary-small">回來了，接續</button></div>
+      <div id="resume-banner" class="resume-banner" hidden><button id="dismiss-resume" aria-label="收起接續提示">×</button><strong>歡迎回來，線頭還在。</strong><p id="resume-copy"></p><button class="text-button" id="reopen-source">回到原句 ↗</button><span class="resume-separator">·</span><button class="text-button" id="resume-question">看看未完話題 →</button><small>僅依本機紀錄定位，沒有模型摘要。</small></div>
+
+      <section class="conversation" id="conversation" aria-label="房間對話" tabindex="0">
+        <div class="room-welcome"><div class="window-art" aria-hidden="true"><div class="window-pane"><i></i></div><div class="plant"><i></i><i></i><i></i></div><div class="cup"></div></div><span class="eyebrow">一張桌子，幾個好奇的人。</span><h2>不急著有答案，先坐下聊聊。</h2><p>一段文字、一個連結，或一個還沒想完的念頭都可以。</p></div>
+        <div class="day-divider"><span>老照片與豆花 · 共創虛構場景</span></div>
+        <div id="messages"></div>
+        <div id="round-status" class="round-status" role="status"></div>
+      </section>
+      <button id="jump-latest" class="jump-latest" hidden>有新訊息，回到下方 ↓</button>
+
+      <section class="composer-section" aria-label="寫下你的訊息">
+        <div class="reply-preview" id="reply-preview" hidden><span></span><button id="cancel-reply" aria-label="取消回覆">×</button></div>
+        <form id="composer" class="composer">
+          <label class="sr-only" for="draft">分享一個發現，或接著聊</label>
+          <textarea id="draft" rows="2" maxlength="12000" placeholder="分享一個發現，或接著聊…"></textarea>
+          <div class="composer-tools"><span class="composer-hint"><span aria-hidden="true">↗</span> 也可以貼連結，不會讀取外部內容</span><button type="submit" id="send" class="send-button">送出 <span aria-hidden="true">↑</span></button></div>
+        </form>
+        <div class="composer-footer"><span id="draft-status">你的文字由你寫，不會自動送給示範角色。</span><label class="offline-toggle"><input type="checkbox" id="simulate-disconnect"><span class="switch" aria-hidden="true"></span> 模擬斷線</label></div>
+        <p class="keyboard-hint">Enter 換行 · Ctrl / ⌘ + Enter 送出</p>
+      </section>
+      </div>
+      <section id="wiki-view" class="wiki-view" aria-label="共同 Wiki" hidden></section>
+    </main>
+
+    <aside class="notebook" id="notebook" aria-label="口袋筆記" inert aria-hidden="true">
+      <div class="notebook-heading"><div><span class="eyebrow">留一點空間給以後</span><h2>口袋筆記</h2></div><button id="close-notebook" class="close-notebook" aria-label="關閉口袋筆記">×</button></div>
+      <section class="notebook-section"><div class="section-title"><h3><span class="section-icon" aria-hidden="true">◌</span> 未完話題</h3><span id="question-count">0</span></div><p class="section-description">不用現在想通，線頭先放這裡。</p><div id="questions"></div><button id="add-question" class="add-question">＋ 暫放一個疑問</button></section>
+      <section class="notebook-section"><div class="section-title"><h3><span class="section-icon" aria-hidden="true">⌑</span> 稍後回看</h3><span id="saved-count">0</span></div><div id="bookmarks"></div></section>
+      <div class="table-note"><span aria-hidden="true">✳</span><p>聊到哪裡，算哪裡。<br>這裡沒有評分，也沒有待辦清單。</p></div>
+      <div class="optional-play"><p>可選演示：三則文字都預先寫好，只演示節奏與停止，並非即時對話。</p><button id="play-demo" class="quiet-button">可選：逐段播放預寫腳本</button></div>
+      <button class="mobile-connections text-button" data-open="connections">模型接線 · 尚未連接 ↗</button>
+      <button id="notebook-wiki" class="notebook-wiki-link">開啟共同 Wiki →<small>公共頁只讀 · 個人修訂留在本機</small></button>
+      <div class="notebook-foot">本機保留訊息、草稿與未完話題。<br>不會自動刪除，沒有自動過期。Wiki 草稿也保留在本機。<br><button id="export-backup" class="text-button">匯出本機備份 ↗</button><br><button id="open-clear-data" class="clear-data-link">清除此裝置的資料</button></div>
+    </aside>
+  </div>
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+
+  <dialog id="question-dialog" aria-labelledby="question-title"><form id="question-form"><span class="eyebrow">先留著，不必急著解答</span><h2 id="question-title">暫放一個疑問</h2><p>下次回來，就從這個線頭接著聊。</p><label for="question-text">還沒想完的事</label><textarea id="question-text" rows="4" maxlength="2000" required placeholder="例如：怎樣讓新加入的人也能自然接上話？"></textarea><div class="dialog-actions"><button type="button" class="quiet-button" id="cancel-question">先不放</button><button type="submit" class="primary-small">放入口袋</button></div></form></dialog>
+  <dialog id="connections-dialog" aria-labelledby="connections-title"><span class="eyebrow">下一步的可能，先放在這裡</span><h2 id="connections-title">模型接線</h2><p>目前只有本機示範腳本。以下服務尚未連接，這個原型沒有登入或授權流程。</p><div class="provider"><span class="provider-icon">O</span><strong>OpenAI</strong><span>尚未連接</span></div><div class="provider"><span class="provider-icon">G</span><strong>Gemini</strong><span>尚未連接</span></div><div class="provider"><span class="provider-icon">M</span><strong>Muse</strong><span>尚未連接</span></div><p class="connection-detail">沒有讀取任何既有登入憑證，也沒有搬入原助理的記憶。訊息不會傳給上述服務。</p><div class="dialog-actions"><button class="primary-small" id="close-connections">知道了</button></div></dialog>
+  <dialog id="data-info-dialog" aria-labelledby="data-info-title"><span class="eyebrow">分享之前，知道資料在哪裡</span><h2 id="data-info-title">你的內容與公共知識</h2><p>聊天、自寫文字、草稿、原話、修訂與異見留在這個瀏覽器。每個瀏覽器獨立，不會默默上傳或同步。公共 Wiki 只讀，只有已審閱發布的合成示範，沒有任何人的私聊。</p><p>此程式未加入分析 SDK 或第三方追蹤腳本。公開站由 ChatGPT Sites 託管；平台會自動記錄瀏覽量與不重複訪客，並設定平台 Cookie。目前未找到可停用這些平台統計的設定，因此無法承諾零平台紀錄。</p><p>公共頁只向同站讀取公開知識，不送出私人內容；所有模型尚未連接。只在本機開啟時，沒有 Sites 平台統計。</p><p class="data-info-source">平台說明：<a href="https://learn.chatgpt.com/docs/sites/managing-a-site" target="_blank" rel="noreferrer noopener">Sites 官方文件 ↗</a>（點擊才開啟，不會自動抓取）。</p><div class="dialog-actions"><button id="close-data-info" class="primary-small">知道了</button></div></dialog>
+  <dialog id="clear-data-dialog" aria-labelledby="clear-data-title"><span class="eyebrow">共用電腦上，離開前可以清乾淨</span><h2 id="clear-data-title">清除此裝置的資料？</h2><p>只清除本瀏覽器、這個網址的交誼廳資料：</p><ul class="clear-scope"><li>全部本機訊息，包含自寫內容與結果未知的訊息</li><li>主輸入框草稿、回覆來源與未存的疑問草稿</li><li>未完話題、已接續的便條及稍後回看</li><li>Wiki 本機草稿、保留原話、全部修訂與異見</li><li>本機示範收件紀錄、離席位置與回合狀態</li></ul><p>確認後會回到初始合成示範，無法在此復原。其他網站、其他瀏覽器與已下載的備份不受影響。你可以先匯出。主機 Cookie 請由瀏覽器的網站資料設定管理。</p><button id="clear-export-backup" class="backup-before-clear">先匯出本機備份 ↗</button><p id="clear-data-error" class="clear-data-error" role="alert" hidden></p><div class="dialog-actions"><button id="cancel-clear-data" class="quiet-button">保留資料</button><button id="confirm-clear-data" class="danger-button">確認清除此裝置的資料</button></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

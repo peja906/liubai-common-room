@@ -1,0 +1,19 @@
+# Generated outputs and local deployment configuration
+/dist/
+/.openai/*
+!/.openai/hosting.example.json
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+.wrangler/
+node_modules/
+
+# Personal drafts, exports and local artifacts
+/private/
+/exports/
+/audit/
+*.local
+*.log
+.DS_Store
