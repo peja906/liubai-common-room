@@ -5,7 +5,7 @@
  */
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { readFile, realpath, lstat } from 'node:fs/promises';
+import { readFile, realpath, lstat, open } from 'node:fs/promises';
 import { dirname, resolve, join, basename, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +57,9 @@ async function requireLocalQaDatabase(filename) {
   const temporaryRoots = await Promise.all(['/tmp', tmpdir()].map((path) => realpath(path)));
   if (!temporaryRoots.some((path) => parent === path || parent.startsWith(path + sep))) throw new Error('temporary_database_required');
   const existing = await lstat(filename).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
-  if (existing && (!existing.isFile() || existing.isSymbolicLink())) throw new Error('qa_database_must_be_regular_file');
+  if (existing && (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1
+    || (typeof process.getuid === 'function' && existing.uid !== process.getuid()))) throw new Error('qa_database_must_be_regular_file');
+  return existing;
 }
 
 function sqliteD1(sqlite) {
@@ -152,10 +154,18 @@ function boundedBody(incoming, outgoing) {
 
 async function main() {
   const config = argumentsForPreview(process.argv.slice(2));
-  await requireLocalQaDatabase(config.databasePath);
+  const existingDatabase = await requireLocalQaDatabase(config.databasePath);
   // Dynamic import permits a short, non-sensitive startup error while the local
   // API/UI files are still being authored. It is never a production import.
   const { createWorkshopAPI } = await import('./api.mjs');
+  const { assertWorkshopSchema } = await import('./moderation.mjs');
+  // Old local databases are inspected without a writable connection. Reject
+  // incompatible schemas before any CREATE or connection PRAGMA can run.
+  if (existingDatabase) {
+    const inspection = new DatabaseSync(config.databasePath, { readOnly: true });
+    try { assertWorkshopSchema(inspection); }
+    finally { inspection.close(); }
+  }
   const assets = {};
   for (const [file, contentType] of Object.entries(files)) assets[`/${file}`] = { body: await readFile(join(root, file), 'utf8'), contentType };
   assets['/index.html'].body = assets['/index.html'].body
@@ -166,12 +176,30 @@ async function main() {
   assets['/workshop-ui.css'] = { body: await readFile(join(folder, 'ui.css'), 'utf8'), contentType: 'text/css; charset=utf-8' };
   assets['/workshop-entry.mjs'] = { body: "import '/app.mjs';\nimport { initWorkshopUI } from '/workshop-ui.mjs';\ninitWorkshopUI();\n", contentType: 'text/javascript; charset=utf-8' };
   const readOnlyWiki = createReadOnlyWikiWorker({ assets });
+  let schema;
+  let wikiSchema;
+  if (!existingDatabase) {
+    [schema, wikiSchema] = await Promise.all([
+      readFile(join(folder, 'schema.sql'), 'utf8'),
+      readFile(join(root, 'shared-foundation/drizzle/0000_public_knowledge_revisions.sql'), 'utf8'),
+    ]);
+    // Applies only to this process and newly created SQLite files/journals.
+    // Exclusive creation avoids silently opening a file that appeared meanwhile.
+    process.umask(0o077);
+    const newFile = await open(config.databasePath, 'wx', 0o600);
+    await newFile.close();
+  } else {
+    const current = await requireLocalQaDatabase(config.databasePath);
+    if (!current || current.dev !== existingDatabase.dev || current.ino !== existingDatabase.ino) throw new Error('qa_database_changed');
+    process.umask(0o077);
+  }
   const sqlite = new DatabaseSync(config.databasePath);
-  sqlite.exec('PRAGMA foreign_keys = ON');
-  sqlite.exec('PRAGMA busy_timeout = 1000');
-  const hasTable = (name) => Boolean(sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name));
-  if (!hasTable('public_knowledge_revisions')) sqlite.exec(await readFile(join(root, 'shared-foundation/drizzle/0000_public_knowledge_revisions.sql'), 'utf8'));
-  if (!hasTable('workshop_posts')) sqlite.exec(await readFile(join(folder, 'schema.sql'), 'utf8'));
+  try {
+    if (!existingDatabase) { sqlite.exec(wikiSchema); sqlite.exec(schema); }
+    assertWorkshopSchema(sqlite);
+    sqlite.exec('PRAGMA foreign_keys = ON');
+    sqlite.exec('PRAGMA busy_timeout = 1000');
+  } catch (error) { sqlite.close(); throw error; }
   const DB = sqliteD1(sqlite);
   let workshop;
   let origin;
@@ -228,4 +256,9 @@ async function main() {
   });
 }
 
-main().catch(() => { console.error('Local workshop unavailable: invalid arguments, temporary QA database, or local files not ready.'); process.exitCode = 1; });
+main().catch((error) => {
+  console.error(error.code === 'unsupported_workshop_schema'
+    ? 'Local workshop unavailable: unsupported_workshop_schema; existing database left unchanged.'
+    : 'Local workshop unavailable: invalid arguments, temporary QA database, or local files not ready.');
+  process.exitCode = 1;
+});

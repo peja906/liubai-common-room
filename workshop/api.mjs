@@ -7,19 +7,31 @@ export const DEFAULT_LIMITS = Object.freeze({ perMinute: 6, perHour: 30, perDay:
 const MINUTE = 60000, HOUR = 3600000, DAY = 86400000;
 const HEX = /^[a-f0-9]{64}$/;
 const encoder = new TextEncoder();
-const COLUMNS = 'seq, id, kind, nickname, body, reply_to, created_at, payload_bytes';
+const COLUMNS = 'seq, id, kind, nickname, body, reply_to, created_at, payload_bytes, review_state, review_version';
 const FIND = `SELECT ${COLUMNS} FROM workshop_posts WHERE id = ? LIMIT 1`;
-const FEED = `SELECT ${COLUMNS} FROM workshop_posts WHERE seq < ? ORDER BY seq DESC LIMIT 21`;
-// SQLite/D1 evaluates every authority check in the same statement as the append.
-// A preflight SELECT is only an idempotency optimization, never quota authority.
+const POST_RECEIPT = 'SELECT id, review_state, review_version FROM workshop_posts WHERE id = ? LIMIT 1';
+const FEED = `SELECT ${COLUMNS} FROM workshop_posts WHERE review_state = 'accepted' AND seq < ? ORDER BY seq DESC LIMIT 21`;
+const VISIBLE = "SELECT id, review_version FROM workshop_posts WHERE review_state = 'accepted' ORDER BY seq DESC LIMIT 201";
+const REPORT_COLUMNS = 'seq, id, post_id, reason, created_at, payload_bytes';
+const FIND_REPORT = `SELECT ${REPORT_COLUMNS} FROM workshop_reports WHERE id = ? LIMIT 1`;
+const REPORT_RECEIPT = 'SELECT id FROM workshop_reports WHERE id = ? LIMIT 1';
+const EVENTS = '(SELECT created_at, payload_bytes FROM workshop_posts UNION ALL SELECT created_at, payload_bytes FROM workshop_reports)';
+// Both independent append statements charge the same combined ledger. Their
+// aggregate authority checks and accepted-target check are part of that INSERT.
+const QUOTA_WHERE = `WHERE (SELECT COUNT(*) FROM ${EVENTS}) < ?
+  AND (SELECT COALESCE(SUM(payload_bytes), 0) FROM ${EVENTS}) + ? <= ?
+  AND (SELECT COUNT(*) FROM ${EVENTS} WHERE created_at > ?) < ?
+  AND (SELECT COUNT(*) FROM ${EVENTS} WHERE created_at > ?) < ?
+  AND (SELECT COUNT(*) FROM ${EVENTS} WHERE created_at > ?) < ?`;
 const APPEND = `INSERT INTO workshop_posts (id, kind, nickname, body, reply_to, created_at, payload_bytes)
 SELECT ?, ?, ?, ?, ?, ?, ?
-WHERE (SELECT COUNT(*) FROM workshop_posts) < ?
-  AND (SELECT COALESCE(SUM(payload_bytes), 0) FROM workshop_posts) + ? <= ?
-  AND (SELECT COUNT(*) FROM workshop_posts WHERE created_at > ?) < ?
-  AND (SELECT COUNT(*) FROM workshop_posts WHERE created_at > ?) < ?
-  AND (SELECT COUNT(*) FROM workshop_posts WHERE created_at > ?) < ?
-  AND (? IS NULL OR EXISTS (SELECT 1 FROM workshop_posts WHERE id = ?))
+${QUOTA_WHERE}
+  AND (? IS NULL OR EXISTS (SELECT 1 FROM workshop_posts WHERE id = ? AND review_state = 'accepted'))
+ON CONFLICT(id) DO NOTHING`;
+const APPEND_REPORT = `INSERT INTO workshop_reports (id, post_id, reason, created_at, payload_bytes)
+SELECT ?, ?, ?, ?, ?
+${QUOTA_WHERE}
+  AND EXISTS (SELECT 1 FROM workshop_posts WHERE id = ? AND review_state = 'accepted')
 ON CONFLICT(id) DO NOTHING`;
 const STATS = `SELECT COUNT(*) AS totalPosts, COALESCE(SUM(payload_bytes), 0) AS totalBytes,
   COALESCE(SUM(CASE WHEN created_at > ? THEN 1 ELSE 0 END), 0) AS minuteCount,
@@ -28,7 +40,8 @@ const STATS = `SELECT COUNT(*) AS totalPosts, COALESCE(SUM(payload_bytes), 0) AS
   MIN(CASE WHEN created_at > ? THEN created_at END) AS hourOldest,
   COALESCE(SUM(CASE WHEN created_at > ? THEN 1 ELSE 0 END), 0) AS dayCount,
   MIN(CASE WHEN created_at > ? THEN created_at END) AS dayOldest
-FROM workshop_posts`;
+FROM ${EVENTS}`;
+const REVIEW_STATES = ['pending', 'accepted', 'rejected', 'hidden'];
 const DISALLOWED_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u;
 const INVISIBLE_NAME = /[\u200b-\u200f\ufeff]/u;
 const RESERVED_NAME = /openai|chatgpt|codex|gemini|muse|claude|官方|已驗證|已验证|管理員|管理员|拾微|小葵|阿光|verified|administrator|moderator/iu;
@@ -71,11 +84,35 @@ export async function computeSubmissionId(input) {
   const canonical = JSON.stringify(normalizeSubmission(input));
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(canonical))), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
-async function publicPost(row) {
+const digest = async (canonical) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(JSON.stringify(canonical)))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+export function normalizeReport(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new InputError('invalid_report');
+  if (Object.keys(input).some((key) => !['postId', 'reason', 'reportId'].includes(key))) throw new InputError('unexpected_field');
+  if (typeof input.postId !== 'string' || !HEX.test(input.postId)) throw new InputError('invalid_report_target');
+  if (typeof input.reason !== 'string') throw new InputError('invalid_text');
+  const reason = input.reason.trim();
+  if (!wellFormed(reason) || DISALLOWED_CONTROLS.test(reason)) throw new InputError('invalid_text');
+  if (!reason || length(reason) > 300) throw new InputError('reason_length');
+  if (input.reportId !== undefined && (typeof input.reportId !== 'string' || !HEX.test(input.reportId))) throw new InputError('invalid_report_id');
+  return { postId: input.postId, reason };
+}
+export const computeReportId = async (input) => digest(normalizeReport(input));
+function reviewMetadata(row) {
+  if (!row || !HEX.test(row.id) || !REVIEW_STATES.includes(row.review_state) || !Number.isSafeInteger(row.review_version) || row.review_version < 1) throw new Error('Invalid persisted review metadata');
+  return { status: 'received', submissionId: row.id, reviewState: row.review_state, reviewVersion: row.review_version };
+}
+async function validatedPost(row, expected) {
   if (!row || !Number.isSafeInteger(row.seq) || row.seq < 1 || !HEX.test(row.id) || !Number.isSafeInteger(row.created_at) || row.created_at < 0) throw new Error('Invalid persisted workshop row');
+  reviewMetadata(row);
   const payload = normalizeSubmission({ kind: row.kind, nickname: row.nickname, body: row.body, replyTo: row.reply_to });
   if (payload.nickname !== row.nickname || payload.body !== row.body || row.payload_bytes !== encoder.encode(JSON.stringify(payload)).byteLength || await computeSubmissionId(payload) !== row.id) throw new Error('Invalid persisted workshop payload');
-  return { id: row.id, seq: row.seq, ...payload, identity: 'unverified-visitor', createdAt: row.created_at, verification: 'unverified', publication: 'public-proposal' };
+  if (expected && JSON.stringify(payload) !== JSON.stringify(expected)) throw new Error('Persisted payload mismatch');
+  return { id: row.id, seq: row.seq, ...payload, identity: 'unverified-visitor', createdAt: row.created_at, verification: 'unverified', publication: 'public-proposal', reviewState: row.review_state, reviewVersion: row.review_version };
+}
+async function validatedReport(row, expected) {
+  if (!row || !Number.isSafeInteger(row.seq) || row.seq < 1 || !HEX.test(row.id) || !Number.isSafeInteger(row.created_at) || row.created_at < 0) throw new Error('Invalid persisted report row');
+  const payload = normalizeReport({ postId: row.post_id, reason: row.reason });
+  if (payload.reason !== row.reason || row.payload_bytes !== encoder.encode(JSON.stringify(payload)).byteLength || await computeReportId(payload) !== row.id || expected && JSON.stringify(payload) !== JSON.stringify(expected)) throw new Error('Invalid persisted report payload');
 }
 async function readJson(request, timeoutMs) {
   const declared = request.headers.get('content-length');
@@ -147,21 +184,18 @@ export function createWorkshopAPI({ enabled = false, visible = true, allowedOrig
   // reads/validation finish, with a final synchronous fail-closed visibility gate.
   const publicJson = (method, value, status = 200) => isBoardVisible() ? json(value, status) : hidden(method, method === 'POST');
   const find = (database, id) => database.prepare(FIND).bind(id).first();
-  const confirmedPost = async (row, expected) => {
-    const post = await publicPost(row);
-    if (expected && JSON.stringify({ kind: post.kind, nickname: post.nickname, body: post.body, replyTo: post.replyTo }) !== JSON.stringify(expected)) throw new Error('Persisted payload mismatch');
-    return post;
-  };
 
   return {
     async fetch(request, env = {}) {
       const url = new URL(request.url);
       if (url.pathname.length > 200 || url.search.length > 80) return error('request_target_too_long', 414);
       const isFeed = url.pathname === '/api/workshop/posts';
+      const isReports = url.pathname === '/api/workshop/reports';
       const receipt = /^\/api\/workshop\/receipt\/([a-f0-9]{64})$/.exec(url.pathname);
-      if (!isFeed && !receipt) return error('not_found', 404);
+      const reportReceipt = /^\/api\/workshop\/report-receipt\/([a-f0-9]{64})$/.exec(url.pathname);
+      if (!isFeed && !isReports && !receipt && !reportReceipt) return error('not_found', 404);
       if (!isBoardVisible()) return hidden(request.method);
-      if (!['GET', 'POST'].includes(request.method) || (receipt && request.method !== 'GET')) return error('method_not_allowed', 405, { Allow: isFeed ? 'GET, POST' : 'GET' });
+      if (!['GET', 'POST'].includes(request.method) || ((receipt || reportReceipt) && request.method !== 'GET') || (isReports && request.method !== 'POST')) return error('method_not_allowed', 405, { Allow: isFeed ? 'GET, POST' : isReports ? 'POST' : 'GET' });
       if (request.method === 'POST') {
         if (!enabled) return error('public_submissions_disabled', 503);
         if (url.search) return error('query_not_supported');
@@ -173,13 +207,20 @@ export function createWorkshopAPI({ enabled = false, visible = true, allowedOrig
       let writeMayHaveStarted = false;
       try {
         if (request.method === 'GET') {
-          if (receipt) {
+          if (receipt || reportReceipt) {
             if (url.search) return error('query_not_supported');
-            const row = await find(database, receipt[1]);
+            const isReport = !!reportReceipt, id = (receipt || reportReceipt)[1];
+            const row = await database.prepare(isReport ? FIND_REPORT : FIND).bind(id).first();
             if (!isBoardVisible()) return hidden(request.method);
             if (!row) return json({ status: 'not_found' }, 404);
-            const post = await publicPost(row);
-            return publicJson(request.method, { status: 'confirmed', post });
+            if (isReport) await validatedReport(row); else await validatedPost(row);
+            if (!isBoardVisible()) return hidden(request.method);
+            // A second body-free read follows hash validation, so a review change
+            // during that await is reflected in the receipt rather than old state.
+            const latest = await database.prepare(isReport ? REPORT_RECEIPT : POST_RECEIPT).bind(id).first();
+            if (!isBoardVisible()) return hidden(request.method);
+            if (!latest || latest.id !== id) throw new Error('Receipt disappeared');
+            return publicJson(request.method, isReport ? { status: 'received', reportId: latest.id } : reviewMetadata(latest));
           }
           if ([...url.searchParams.keys()].some((key) => key !== 'cursor') || url.searchParams.getAll('cursor').length > 1) return error('query_not_supported');
           const cursorText = url.searchParams.get('cursor');
@@ -188,23 +229,44 @@ export function createWorkshopAPI({ enabled = false, visible = true, allowedOrig
           if (!isBoardVisible()) return hidden(request.method);
           if (!Array.isArray(rows?.results) || rows.results.length > 21) throw new Error('Invalid database read');
           const page = rows.results.slice(0, 20);
-          const posts = await Promise.all(page.map(publicPost));
-          return publicJson(request.method, { schema: 'liubai-workshop', schemaVersion: 1, posts, nextCursor: rows.results.length > 20 ? page.at(-1).seq : null, writes: enabled ? 'enabled' : 'disabled' });
+          const candidates = await Promise.all(page.map((row) => validatedPost(row)));
+          if (!isBoardVisible()) return hidden(request.method);
+          // This bounded final DB visibility snapshot is the individual-hide
+          // boundary. No hash/read await occurs between it and Response creation.
+          const current = await database.prepare(VISIBLE).bind().all();
+          if (!isBoardVisible()) return hidden(request.method);
+          if (!Array.isArray(current?.results) || current.results.length > 200) throw new Error('Invalid visibility snapshot');
+          const versions = new Map();
+          for (const row of current.results) {
+            if (!HEX.test(row.id) || !Number.isSafeInteger(row.review_version) || row.review_version < 1 || versions.has(row.id)) throw new Error('Invalid visibility metadata');
+            versions.set(row.id, row.review_version);
+          }
+          const posts = candidates.filter((post) => post.reviewState === 'accepted' && versions.get(post.id) === post.reviewVersion)
+            .map((post) => ({ ...post, replyAvailability: post.replyTo !== null && versions.has(post.replyTo) ? 'accepted' : 'unavailable' }));
+          return publicJson(request.method, { schema: 'liubai-workshop', schemaVersion: 2, posts, visibleIds: [...versions.keys()], nextCursor: rows.results.length > 20 ? page.at(-1).seq : null, writes: enabled ? 'enabled' : 'disabled' });
         }
         const input = await readJson(request, bodyReadTimeoutMs);
         if (!isBoardVisible()) return hidden(request.method);
-        const payload = normalizeSubmission(input);
-        if (!input.submissionId) return error('submission_id_required');
-        const id = await computeSubmissionId(payload);
+        const payload = isReports ? normalizeReport(input) : normalizeSubmission(input);
+        const requestedId = isReports ? input.reportId : input.submissionId;
+        if (!requestedId) return error(isReports ? 'report_id_required' : 'submission_id_required');
+        const id = await (isReports ? computeReportId(payload) : computeSubmissionId(payload));
         if (!isBoardVisible()) return hidden(request.method);
-        if (id !== input.submissionId) return error('submission_id_mismatch');
+        if (id !== requestedId) return error(isReports ? 'report_id_mismatch' : 'submission_id_mismatch');
         const bytes = encoder.encode(JSON.stringify(payload)).byteLength;
-        const previous = await find(database, id);
+        const findCurrent = () => database.prepare(isReports ? FIND_REPORT : FIND).bind(id).first();
+        const received = async (row, duplicate) => {
+          if (isReports) await validatedReport(row, payload); else await validatedPost(row, payload);
+          if (!isBoardVisible()) return hidden(request.method, writeMayHaveStarted);
+          const latest = await database.prepare(isReports ? REPORT_RECEIPT : POST_RECEIPT).bind(id).first();
+          if (!isBoardVisible()) return hidden(request.method, writeMayHaveStarted);
+          if (!latest || latest.id !== id) throw new Error('Receipt disappeared');
+          const value = isReports ? { status: 'received', reportId: latest.id } : { ...reviewMetadata(latest), duplicate };
+          return publicJson(request.method, value, duplicate ? 200 : 201);
+        };
+        const previous = await findCurrent();
         if (!isBoardVisible()) return hidden(request.method);
-        if (previous) {
-          const post = await confirmedPost(previous, payload);
-          return publicJson(request.method, { status: 'confirmed', duplicate: true, post });
-        }
+        if (previous) return await received(previous, true);
         const now = clock(); if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid server clock');
         let writeError = false, inserted = false;
         try {
@@ -212,25 +274,24 @@ export function createWorkshopAPI({ enabled = false, visible = true, allowedOrig
           // run() has begun, hiding cannot retroactively cancel or undo its SQL.
           if (!isBoardVisible()) return hidden(request.method);
           writeMayHaveStarted = true;
-          const result = await database.prepare(APPEND).bind(id, payload.kind, payload.nickname, payload.body, payload.replyTo, now, bytes,
-            quota.totalPosts, bytes, quota.totalPayloadBytes,
-            now - MINUTE, quota.perMinute, now - HOUR, quota.perHour, now - DAY, quota.perDay,
-            payload.replyTo, payload.replyTo).run();
+          const quotaValues = [quota.totalPosts, bytes, quota.totalPayloadBytes, now - MINUTE, quota.perMinute, now - HOUR, quota.perHour, now - DAY, quota.perDay];
+          const values = isReports
+            ? [id, payload.postId, payload.reason, now, bytes, ...quotaValues, payload.postId]
+            : [id, payload.kind, payload.nickname, payload.body, payload.replyTo, now, bytes, ...quotaValues, payload.replyTo, payload.replyTo];
+          const result = await database.prepare(isReports ? APPEND_REPORT : APPEND).bind(...values).run();
           inserted = Number(result?.meta?.changes ?? result?.changes) === 1;
         } catch { writeError = true; }
         if (!isBoardVisible()) return hidden(request.method, writeMayHaveStarted);
         // A timed-out write may still commit. Confirm only by reading its immutable row.
-        const row = await find(database, id);
+        const row = await findCurrent();
         if (!isBoardVisible()) return hidden(request.method, writeMayHaveStarted);
-        if (row) {
-          const post = await confirmedPost(row, payload);
-          return publicJson(request.method, { status: 'confirmed', duplicate: !inserted, post }, inserted ? 201 : 200);
-        }
+        if (row) return await received(row, !inserted);
         if (writeError) return error('submission_result_unknown', 503);
-        if (payload.replyTo !== null) {
-          const parent = await find(database, payload.replyTo);
+        const targetId = isReports ? payload.postId : payload.replyTo;
+        if (targetId !== null) {
+          const parent = await find(database, targetId);
           if (!isBoardVisible()) return hidden(request.method, writeMayHaveStarted);
-          if (!parent) return error('reply_not_found');
+          if (!parent || parent.review_state !== 'accepted') return error(isReports ? 'target_not_accepted' : 'reply_not_accepted');
         }
         const stats = await database.prepare(STATS).bind(now - MINUTE, now - MINUTE, now - HOUR, now - HOUR, now - DAY, now - DAY).first();
         if (!isBoardVisible()) return hidden(request.method, writeMayHaveStarted);
