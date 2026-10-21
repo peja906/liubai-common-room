@@ -10,10 +10,31 @@ import {
   exportProposal,
 } from '../wiki-core.mjs';
 import { createReadOnlyWikiWorker } from '../shared-foundation/worker.mjs';
+import { createHash } from 'node:crypto';
 
 const request = (path = '/api/wiki', method = 'GET', extra = {}) =>
   new Request(`https://example.invalid${path}`, { method, ...extra });
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const sourceContext = (source) => source.contextId ?? source.sceneId;
+
+test('the public catalogue separates ten synthetic sources from three collaboration summaries', () => {
+  assert.equal(PUBLIC_ARTICLES.length, 2);
+  assert.equal(SOURCE_CATALOG.length, 13);
+  assert.equal(new Set(SOURCE_CATALOG.map((source) => source.id)).size, 13);
+  const synthetic = SOURCE_CATALOG.filter((source) => source.scope === 'public-synthetic');
+  const curated = SOURCE_CATALOG.filter((source) => source.scope === 'public-curated');
+  assert.equal(synthetic.length, 10);
+  assert.equal(curated.length, 3);
+  assert.ok(synthetic.every((source) => source.synthetic && source.origin === 'script' && sourceContext(source) === 'old-park-photo'));
+  assert.ok(curated.every((source) => !source.synthetic && source.origin === 'curated' && sourceContext(source) === 'base-how-we-gather'));
+  const article = PUBLIC_ARTICLES.find((item) => item.id === 'base-how-we-gather');
+  assert.equal(article.title, '進來坐坐：基地怎麼相處');
+  assert.equal(article.synthetic, false);
+  assert.deepEqual(article.sourceIds, curated.map((source) => source.id));
+  assert.deepEqual(article.sections.map((section) => section.title), ['一起相處', '哲學討論・開放問題']);
+  assert.match(article.body, /不是模型具有主觀感受的證明/);
+  assert.match(article.footer, /模型尚未自動連接/);
+});
 
 function memoryStorage(initial = null) {
   let value = initial;
@@ -140,6 +161,39 @@ test('corrupt Wiki data is retained and disabled rather than overwritten', () =>
   assert.equal(state.wiki.privateExample, 'keep this');
 });
 
+test('a collaboration-page proposal preserves curated attribution through versions, dissent, export and reload', () => {
+  const state = createState();
+  const article = PUBLIC_ARTICLES.find((item) => item.id === 'base-how-we-gather');
+  const originalArticle = JSON.stringify(article);
+  const proposal = createProposal(state, { publicArticleId: article.id });
+  assert.equal(proposal.publicationStatus, 'not-published');
+  assert.deepEqual(proposal.originalSources, article.sources);
+  setProposalDraft(state, proposal.id, { body: `${article.body}\n\nlocal proposed wording` });
+  const revision = saveRevision(state, proposal.id, { note: 'local example revision' });
+  const dissent = addDissent(state, proposal.id, 'local alternative remains open', { revisionId: revision.id, sourceIds: [article.sourceIds[1]] });
+  assert.equal(dissent.sources[0].author, 'Gemini');
+  assert.equal(dissent.sources[0].origin, 'curated');
+  const storage = memoryStorage();
+  assert.equal(saveState(storage, state).ok, true);
+  const reloaded = loadState(storage);
+  assert.equal(reloaded.ok, true);
+  assert.ok(ensureWiki(reloaded.state));
+  const restored = reloaded.state.wiki.proposals.find((item) => item.id === proposal.id);
+  assert.equal(restored.revisions.length, 2);
+  assert.equal(restored.revisions[0].body, article.body);
+  assert.equal(restored.revisions[1].body, `${article.body}\n\nlocal proposed wording`);
+  assert.ok(Object.isFrozen(restored.revisions[1]));
+  assert.deepEqual(restored.dissent[0], dissent);
+  assert.deepEqual(searchWiki(reloaded.state, 'local alternative remains open').map((hit) => hit.type), ['dissent']);
+  const exported = exportProposal(reloaded.state, proposal.id);
+  assert.equal(exported.scope, 'local-private');
+  assert.equal(exported.publicationStatus, 'not-published');
+  assert.deepEqual(exported.basedOnPublicArticle, article);
+  assert.deepEqual(exported.proposal.originalSources, article.sources);
+  assert.equal(exported.proposal.dissent.length, 1);
+  assert.equal(JSON.stringify(article), originalArticle);
+});
+
 test('Worker serves known assets, rejects writes and queries, and reports missing DB', async () => {
   const worker = createReadOnlyWikiWorker({ assets: { '/index.html': { body: '<p>example</p>', contentType: 'text/html' } } });
   const home = await worker.fetch(request('/'));
@@ -154,7 +208,7 @@ test('Worker serves known assets, rejects writes and queries, and reports missin
   assert.equal((await worker.fetch(request())).status, 503);
 });
 
-test('mock DB receives only the compiled public seed and reads reuse its revision', async () => {
+test('mock DB receives exactly the two compiled public seeds and reads reuse both revisions', async () => {
   const DB = mockDatabase();
   const worker = createReadOnlyWikiWorker({ clock: () => 1234 });
   const headers = { Cookie: 'private-example=do-not-persist', 'X-Local-Draft': 'do-not-persist' };
@@ -164,16 +218,50 @@ test('mock DB receives only the compiled public seed and reads reuse its revisio
   assert.deepEqual(body.articles, PUBLIC_ARTICLES);
   assert.deepEqual(body.sources, SOURCE_CATALOG);
   assert.equal(body.writes, 'disabled');
-  assert.equal(DB.inserts.length, PUBLIC_ARTICLES.length);
-  const [hash, articleId, payloadHash, payload, createdAt] = DB.inserts[0];
-  assert.match(hash, /^[a-f0-9]{64}$/);
-  assert.equal(hash, payloadHash);
-  assert.equal(articleId, PUBLIC_ARTICLES[0].id);
-  assert.deepEqual(JSON.parse(payload), { article: PUBLIC_ARTICLES[0], sources: SOURCE_CATALOG });
-  assert.equal(createdAt, 1234);
+  assert.equal(DB.inserts.length, 2);
+  for (const [index, [hash, articleId, payloadHash, payload, createdAt]] of DB.inserts.entries()) {
+    const article = PUBLIC_ARTICLES[index];
+    assert.match(hash, /^[a-f0-9]{64}$/);
+    assert.equal(hash, payloadHash);
+    assert.equal(articleId, article.id);
+    const context = article.contextId ?? sourceContext(article.sources[0]);
+    const sources = SOURCE_CATALOG.filter((source) => source.scope === article.scope && sourceContext(source) === context);
+    assert.deepEqual(JSON.parse(payload), { article, sources });
+    assert.equal(createdAt, 1234);
+  }
   assert.ok(!JSON.stringify(DB.inserts).includes('do-not-persist'));
   assert.equal((await worker.fetch(request(), { DB })).status, 200);
-  assert.equal(DB.inserts.length, PUBLIC_ARTICLES.length);
+  assert.equal(DB.inserts.length, 2);
+});
+
+test('adding the collaboration page preserves the original synthetic revision hash', async () => {
+  const originalArticle = PUBLIC_ARTICLES.find((article) => article.id === 'old-banyan-and-tofu');
+  const originalSources = SOURCE_CATALOG.filter((source) => source.scope === 'public-synthetic');
+  const expectedHash = createHash('sha256').update(JSON.stringify({ article: originalArticle, sources: originalSources })).digest('hex');
+  const originalDB = mockDatabase();
+  const originalWorker = createReadOnlyWikiWorker({ articles: [originalArticle], sources: originalSources });
+  const originalResponse = await originalWorker.fetch(request(), { DB: originalDB });
+  assert.equal(originalResponse.status, 200);
+  const originalRevision = (await originalResponse.json()).revisions[0];
+  const expandedDB = mockDatabase();
+  const expandedResponse = await createReadOnlyWikiWorker().fetch(request(), { DB: expandedDB });
+  assert.equal(expandedResponse.status, 200);
+  const expandedRevision = (await expandedResponse.json()).revisions.find((revision) => revision.articleId === originalArticle.id);
+  assert.equal(originalRevision.revisionId, expectedHash);
+  assert.equal(expandedRevision.revisionId, expectedHash);
+  assert.equal(originalDB.inserts[0][3], expandedDB.inserts.find((insert) => insert[1] === originalArticle.id)[3]);
+});
+
+test('write attempts never seed or alter even the mock public DB', async () => {
+  const DB = mockDatabase();
+  const worker = createReadOnlyWikiWorker();
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    const response = await worker.fetch(request('/api/wiki', method, { body: 'local private example' }), { DB });
+    assert.equal(response.status, 405);
+    assert.equal((await response.json()).writes, 'disabled');
+  }
+  assert.equal(DB.inserts.length, 0);
+  assert.equal(DB.rows.size, 0);
 });
 
 test('mock DB integrity mismatch fails closed', async () => {
@@ -186,11 +274,21 @@ test('mock DB integrity mismatch fails closed', async () => {
   assert.equal((await response.json()).error, 'shared_read_unavailable');
 });
 
-test('Worker rejects private or non-synthetic seeds before persistence', () => {
+test('Worker rejects private sources and inconsistent synthetic metadata before persistence', () => {
   const sources = clone(SOURCE_CATALOG);
   sources[0].scope = 'local-private';
-  assert.throws(() => createReadOnlyWikiWorker({ sources }), /public synthetic/);
+  assert.throws(() => createReadOnlyWikiWorker({ sources }), /public source material/);
   const articles = clone(PUBLIC_ARTICLES);
   articles[0].synthetic = false;
-  assert.throws(() => createReadOnlyWikiWorker({ articles }), /public seed/);
+  assert.throws(() => createReadOnlyWikiWorker({ articles }), /public articles/);
+});
+
+test('Worker rejects cross-context curated sources even when their catalogue entry matches', () => {
+  const sources = clone(SOURCE_CATALOG);
+  const articles = clone(PUBLIC_ARTICLES);
+  const curated = sources.find((source) => source.origin === 'curated');
+  curated.contextId = 'another-public-context';
+  const article = articles.find((item) => item.id === 'base-how-we-gather');
+  article.sources[0] = clone(curated);
+  assert.throws(() => createReadOnlyWikiWorker({ articles, sources }), /same public context/);
 });

@@ -40,6 +40,8 @@
 .wiki-body{font-size:15px;line-height:2.1;color:#3d5541;white-space:pre-wrap;overflow-wrap:anywhere;margin:25px 0}
 .wiki-body h3{font-size:15px;font-weight:600;margin:25px 0 8px;color:#3a593d}
 .wiki-body p{margin:0 0 15px;line-height:2.1}
+.wiki-article-footer{border-top:1px solid #dfe6d7;margin-top:26px;padding-top:18px;font-size:14px;line-height:1.9;color:#42583b;white-space:pre-wrap;overflow-wrap:anywhere}
+.wiki-article-footer p{margin:0;font-size:inherit;line-height:inherit;color:inherit}
 .wiki-actions{display:flex;gap:13px;align-items:center;flex-wrap:wrap;margin:21px 0}
 .wiki-actions button{font-size:12px;min-height:36px}.wiki-actions .primary-small{font-size:13px}
 .wiki-source-section{border-top:1px solid #dfe6d7;padding-top:24px;margin-top:30px}

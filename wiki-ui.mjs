@@ -7,6 +7,10 @@ const escape = (text) => String(text ?? '').replace(/[&<>"']/g, (c) => ({ '&': '
 const short = (text, n = 95) => text.length > n ? text.slice(0, n) + '…' : text;
 const time = (value) => new Intl.DateTimeFormat('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(value);
 const button = (action, text, id = '', cls = 'text-button') => `<button class="${cls}" data-wiki-action="${action}" data-id="${escape(id)}">${text}</button>`;
+const isCuratedArticle = (article) => article?.scope === 'public-curated' && article.synthetic === false;
+const isCuratedSource = (source) => source?.origin === 'curated' && source.scope === 'public-curated' && source.synthetic === false && source.verification === 'unverified' && source.sourceKind === 'project-collaboration-summary' && typeof source.contextId === 'string' && source.contextId.length > 0;
+const publicLabel = (article) => isCuratedArticle(article) ? '本專案共創草案 · 未定稿' : '公共合成示範 · 待查';
+const sourceLabel = (source, snapshot = false) => isCuratedSource(source) ? '公共共創過程整理' : source.origin === 'script' ? '合成場景原話' : snapshot ? '本人自寫 · 本機快照' : '本人自寫 · 本機原話';
 
 export function initWikiUI({ getState, persist, notify, onOpen, onSource, onPocket, getSaveError }) {
   const root = document.querySelector('#wiki-view');
@@ -21,14 +25,14 @@ export function initWikiUI({ getState, persist, notify, onOpen, onSource, onPock
   const wiki = () => ensureWiki(getState());
   const proposal = () => wiki()?.proposals.find((item) => item.id === selected.id);
   const save = () => { const ok = persist(); updateSaveHint(); return ok; };
-  root.innerHTML = `<div class="wiki-top"><div class="wiki-topline"><div><span class="wiki-eyebrow">共同 Wiki · 從原話開始</span><h2>線索可以留下，答案慢慢長出來。</h2><p>保留來源、不同看法與修訂。存下來，不代表已證實。</p></div><span class="wiki-public-status">公共頁只讀 · 私人草稿僅本機</span></div><p id="wiki-public-store" class="wiki-store-status" role="status"></p><div class="wiki-search-wrap"><label for="wiki-search">找回線索</label><input id="wiki-search" type="search" placeholder="搜尋原話、草稿、舊版本或異見" maxlength="200" autocomplete="off"></div><p class="wiki-search-hint">搜尋公共示範與你自己的本機內容，不搜尋其他訪客的私聊。</p></div><div class="wiki-layout"><aside class="wiki-rail" aria-label="知識頁與本機草稿"></aside><div class="wiki-content"></div></div>`;
+  root.innerHTML = `<div class="wiki-top"><div class="wiki-topline"><div><span class="wiki-eyebrow">共同 Wiki · 從原話開始</span><h2>線索可以留下，答案慢慢長出來。</h2><p>保留來源、不同看法與修訂。存下來，不代表已證實。</p></div><span class="wiki-public-status">公共頁只讀 · 私人草稿僅本機</span></div><p id="wiki-public-store" class="wiki-store-status" role="status"></p><div class="wiki-search-wrap"><label for="wiki-search">找回線索</label><input id="wiki-search" type="search" placeholder="搜尋原話、草稿、舊版本或異見" maxlength="200" autocomplete="off"></div><p class="wiki-search-hint">搜尋公共頁與你自己的本機內容，不搜尋其他訪客的私聊。</p></div><div class="wiki-layout"><aside class="wiki-rail" aria-label="知識頁與本機草稿"></aside><div class="wiki-content"></div></div>`;
   const dialog = document.createElement('dialog');
   dialog.id = 'wiki-source-dialog'; dialog.className = 'wiki-source-dialog';
   dialog.setAttribute('aria-label', '對話原文與來源'); document.body.append(dialog);
 
   function renderRail() {
     const data = wiki();
-    $('.wiki-rail').innerHTML = `<h3 class="wiki-rail-heading">公開知識 · 所有人同一原版</h3>${publicArticles.map((article) => `<button class="wiki-choice ${selected.type === 'public' && selected.id === article.id && !query ? 'active' : ''}" data-wiki-action="public" data-id="${escape(article.id)}">${escape(article.title)}<small>合成場景共創，人工整理 · 待查</small></button>`).join('')}<h3 class="wiki-rail-heading local-heading">我的本機草稿 · 未發布</h3>${data?.proposals.length ? [...data.proposals].reverse().map((item) => `<button class="wiki-choice ${selected.type === 'proposal' && selected.id === item.id && !query ? 'active' : ''}" data-wiki-action="proposal" data-id="${escape(item.id)}">${escape(item.draft.title || '未命名草稿')}<small>${item.revisions.length} 版 · ${item.dissent.length} 則不同看法</small></button>`).join('') : '<p class="wiki-rail-empty">先留原話也可以，<br>不必現在命名或分類。</p>'}${button('new', '＋ 空白本機草稿', '', 'wiki-new')}${button('clips', `口袋原話（${data?.clips.length ?? 0}）`, '', `wiki-choice ${selected.type === 'clips' ? 'active' : ''}`)}<div class="wiki-help"><strong>怎樣真的貢獻？</strong>在瀏覽器整理提案、留好版本與異見，再匯出檔案交給受信任的整理者。審閱後才能發布原站。<br><br>目前沒有共享寫入或同步。${button('contribute', '看看貢獻方式 →')}</div>`;
+    $('.wiki-rail').innerHTML = `<h3 class="wiki-rail-heading">公開知識 · 所有人同一原版</h3>${publicArticles.map((article) => `<button class="wiki-choice ${selected.type === 'public' && selected.id === article.id && !query ? 'active' : ''}" data-wiki-action="public" data-id="${escape(article.id)}">${escape(article.title)}<small>${isCuratedArticle(article) ? '本專案共創草案 · 未定稿' : '合成場景共創，人工整理 · 待查'}</small></button>`).join('')}<h3 class="wiki-rail-heading local-heading">我的本機草稿 · 未發布</h3>${data?.proposals.length ? [...data.proposals].reverse().map((item) => `<button class="wiki-choice ${selected.type === 'proposal' && selected.id === item.id && !query ? 'active' : ''}" data-wiki-action="proposal" data-id="${escape(item.id)}">${escape(item.draft.title || '未命名草稿')}<small>${item.revisions.length} 版 · ${item.dissent.length} 則不同看法</small></button>`).join('') : '<p class="wiki-rail-empty">先留原話也可以，<br>不必現在命名或分類。</p>'}${button('new', '＋ 空白本機草稿', '', 'wiki-new')}${button('clips', `口袋原話（${data?.clips.length ?? 0}）`, '', `wiki-choice ${selected.type === 'clips' ? 'active' : ''}`)}<div class="wiki-help"><strong>怎樣真的貢獻？</strong>在瀏覽器整理提案、留好版本與異見，再匯出檔案交給受信任的整理者。審閱後才能發布原站。<br><br>目前沒有共享寫入或同步。${button('contribute', '看看貢獻方式 →')}</div>`;
   }
 
   function sourceById(id) {
@@ -40,11 +44,13 @@ export function initWikiUI({ getState, persist, notify, onOpen, onSource, onPock
   }
 
   function sourcesMarkup(sources) {
-    return `<section class="wiki-source-section"><h3 class="wiki-section-heading">原話與來源</h3><p class="wiki-small">保留原句，不把轉述當作外部證據。點擊可回到對話或查看合成原文脈絡。</p><div class="wiki-source-list">${sources.map((source) => `<button class="wiki-source" data-wiki-action="source" data-id="${escape(source.id)}"><strong>${escape(source.author)} · ${source.origin === 'script' ? '合成場景原話' : '本人自寫 · 本機原話'}</strong><span>${escape(short(source.text, 160))}</span><small>回到原話 ↗${source.status === 'unknown' ? ' · 這則的本機送出結果仍未知' : ''}</small></button>`).join('')}</div></section>`;
+    const curated = sources.length > 0 && sources.every(isCuratedSource);
+    return `<section class="wiki-source-section"><h3 class="wiki-section-heading">${curated ? '共創過程與來源' : '原話與來源'}</h3><p class="wiki-small">${curated ? '以下是本專案公共共創過程的整理，並非私人對話逐字稿、模型親歷記憶或供應商官方聲明。' : '保留原句，不把轉述當作外部證據。點擊可回到對話或查看合成原文脈絡。'}</p><div class="wiki-source-list">${sources.map((source) => `<button class="wiki-source" data-wiki-action="source" data-id="${escape(source.id)}"><strong>${escape(source.author)} · ${sourceLabel(source)}</strong><span>${escape(short(source.text, 160))}</span><small>${isCuratedSource(source) ? '查看共創過程 ↗' : '回到原話 ↗'}${source.status === 'unknown' ? ' · 這則的本機送出結果仍未知' : ''}</small></button>`).join('')}</div></section>`;
   }
 
   function renderPublic(article) {
-    return `<article class="wiki-page wiki-public-article" data-public-id="${escape(article.id)}"><div class="wiki-tags"><span class="wiki-tag">公開原版 · 只讀</span><span class="wiki-tag unverified">虛構示範 · 待查</span></div><h2 class="wiki-article-title">${escape(article.title)}</h2><p class="wiki-credit">${escape(article.credit)} · 公共原版第 ${article.version} 版</p><div class="wiki-notice">這是虛構場景的人工整理，並非外部已核實事實，也不是 Muse／Gemini 的即時回覆。你的私人草稿不會出現在這個公共原版。</div><div class="wiki-body">${article.sections.map((section) => `<section><h3>${escape(section.title)}</h3><p>${escape(section.text)}</p></section>`).join('')}</div><div class="wiki-actions">${button('propose', '提出本機修訂 →', article.id, 'primary-small')}${button('contribute', '怎樣把提案交給整理者？')}</div>${sourcesMarkup(article.sources)}</article>`;
+    const curated = isCuratedArticle(article);
+    return `<article class="wiki-page wiki-public-article" data-public-id="${escape(article.id)}"><div class="wiki-tags"><span class="wiki-tag">公開原版 · 只讀</span><span class="wiki-tag unverified">${curated ? '本專案共創草案 · 未定稿' : '虛構示範 · 待查'}</span></div><h2 class="wiki-article-title">${escape(article.title)}</h2><p class="wiki-credit">${escape(article.credit)} · 公共原版第 ${article.version} 版</p><div class="wiki-notice">${curated ? '這是本專案的協作設計草案，不代表外部事實已核實，也不是即時模型對話或供應商官方政策。你的私人草稿不會出現在這個公共原版。' : '這是虛構場景的人工整理，並非外部已核實事實，也不是 Muse／Gemini 的即時回覆。你的私人草稿不會出現在這個公共原版。'}</div><div class="wiki-body">${article.sections.map((section) => `<section><h3>${escape(section.title)}</h3>${(curated ? section.text.split(/\n\n/) : [section.text]).map((paragraph) => `<p>${escape(paragraph)}</p>`).join('')}</section>`).join('')}</div><div class="wiki-actions">${button('propose', '提出本機修訂 →', article.id, 'primary-small')}${button('contribute', '怎樣把提案交給整理者？')}</div>${sourcesMarkup(article.sources)}${article.footer ? `<footer class="wiki-article-footer"><p>${escape(article.footer)}</p></footer>` : ''}</article>`;
   }
 
   function renderProposal(item) {
@@ -59,7 +65,7 @@ export function initWikiUI({ getState, persist, notify, onOpen, onSource, onPock
 
   function renderSearch() {
     const hits = searchWiki(getState(), query);
-    return `<section class="wiki-search-results"><h2 class="wiki-section-heading">找到 ${hits.length} 個線頭</h2><p class="wiki-small">包括舊版本與異見；搜尋結果不是核實結果。</p>${hits.length ? hits.map((hit) => `<button class="wiki-result" data-wiki-action="result" data-id="${escape(hit.id)}" data-kind="${escape(hit.type)}" data-proposal="${escape(hit.proposalId || '')}"><small>${hit.type === 'public-article' ? '公共合成示範 · 待查' : hit.type === 'dissent' ? '本機異見 · 未發布' : hit.type === 'revision' ? `本機歷史 · 第 ${escape(hit.revisionNumber)} 版 · 未發布` : hit.type === 'proposal' ? '本機目前草稿 · 未發布' : '本機原話 · 未發布'}</small><strong>${escape(hit.title || (hit.type === 'clip' ? '口袋裡的原話' : '未命名草稿'))}</strong><p>${escape(hit.text)}</p></button>`).join('') : '<p class="wiki-empty">沒有找到。可以試試原句中的另一個詞。</p>'}</section>`;
+    return `<section class="wiki-search-results"><h2 class="wiki-section-heading">找到 ${hits.length} 個線頭</h2><p class="wiki-small">包括舊版本與異見；搜尋結果不是核實結果。</p>${hits.length ? hits.map((hit) => `<button class="wiki-result" data-wiki-action="result" data-id="${escape(hit.id)}" data-kind="${escape(hit.type)}" data-proposal="${escape(hit.proposalId || '')}"><small>${hit.type === 'public-article' ? publicLabel(publicArticles.find((article) => article.id === hit.id)) : hit.type === 'dissent' ? '本機異見 · 未發布' : hit.type === 'revision' ? `本機歷史 · 第 ${escape(hit.revisionNumber)} 版 · 未發布` : hit.type === 'proposal' ? '本機目前草稿 · 未發布' : '本機原話 · 未發布'}</small><strong>${escape(hit.title || (hit.type === 'clip' ? '口袋裡的原話' : '未命名草稿'))}</strong><p>${escape(hit.text)}</p></button>`).join('') : '<p class="wiki-empty">沒有找到。可以試試原句中的另一個詞。</p>'}</section>`;
   }
 
   function contributionMarkup() {
@@ -129,10 +135,17 @@ export function initWikiUI({ getState, persist, notify, onOpen, onSource, onPock
 
   function openSource(source) {
     if (!source) return;
-    if (onSource(source)) return;
-    const isCanonical = sourceCatalog.some((item) => item.id === source.id && item.origin === source.origin && item.author === source.author && item.text === source.text);
-    const context = isCanonical ? sourceCatalog : [source];
-    dialog.innerHTML = `<h2>回到原話，而非推論。</h2><p>${isCanonical ? '這是公開合成場景的完整原文脈絡。這段尚未出現在你的本機對話裡，因此在此讀原文，不會替你新增聊天。' : '這是你在本機留下的原話快照。原句保留，不代表說法已被核實。'}</p><div class="wiki-source-context">${context.map((item) => `<article class="${item.id === source.id ? 'selected' : ''}" data-source-ref="${escape(item.id)}"><strong>${escape(item.author)} · ${item.origin === 'script' ? '合成場景原話' : '本人自寫 · 本機快照'}</strong><p>${escape(item.text)}</p></article>`).join('')}</div><div class="dialog-actions"><button class="primary-small" id="wiki-close-source">回到知識頁</button></div>`;
+    const curated = isCuratedSource(source);
+    if (source.origin !== 'curated' && onSource(source)) return;
+    const isCanonical = sourceCatalog.some((item) => item.id === source.id && item.origin === source.origin && item.author === source.author && item.text === source.text && item.contextId === source.contextId && item.sourceKind === source.sourceKind && item.sceneId === source.sceneId);
+    const context = !isCanonical ? [source] : curated
+      ? sourceCatalog.filter((item) => isCuratedSource(item) && source.contextId && item.contextId === source.contextId)
+      : sourceCatalog.filter((item) => item.origin === source.origin && item.sceneId === source.sceneId);
+    const contextNote = curated
+      ? isCanonical ? '這是本專案公共共創過程的整理，只呈現這一頁的來源說明，不是私人對話逐字稿、模型親歷記憶或即時回覆。' : '這是你在本機保留的公共共創過程整理快照，不會改動公共原版，也不代表說法已被核實。'
+      : isCanonical ? '這是公開合成場景的完整原文脈絡。這段尚未出現在你的本機對話裡，因此在此讀原文，不會替你新增聊天。' : '這是你在本機留下的原話快照。原句保留，不代表說法已被核實。';
+    dialog.setAttribute('aria-label', curated ? '公共共創過程與來源' : '對話原文與來源');
+    dialog.innerHTML = `<h2>${curated ? '查看公共共創過程。' : '回到原話，而非推論。'}</h2><p>${contextNote}</p><div class="wiki-source-context">${context.map((item) => `<article class="${item.id === source.id ? 'selected' : ''}" data-source-ref="${escape(item.id)}"><strong>${escape(item.author)} · ${sourceLabel(item, true)}</strong><p>${escape(item.text)}</p></article>`).join('')}</div><div class="dialog-actions"><button class="primary-small" id="wiki-close-source">回到知識頁</button></div>`;
     dialog.showModal(); dialog.querySelector('#wiki-close-source').addEventListener('click', () => dialog.close());
     requestAnimationFrame(() => dialog.querySelector('.selected')?.scrollIntoView({ block: 'center' }));
   }
