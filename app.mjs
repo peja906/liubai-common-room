@@ -81,7 +81,7 @@ function messageMarkup(message) {
     ? `<div class="unknown-status"><strong>送出結果未知 · 示範斷線</strong><p>這則內容已保留。尚未取得本機示範收件確認，不會自動重送，也不會交給腳本接話。</p><button data-action="receipt" data-id="${escape(message.id)}">核對本機示範收件紀錄</button><code>訊息 ID：${escape(message.id)}</code></div>`
     : message.status === 'pending' ? '<div class="delivery">等待本機示範確認…</div>'
     : isUser ? '<div class="delivery">✓ 本機示範已確認 · 未傳至外部</div>' : '';
-  return `${message.sceneBreak ? `<div class="scene-break">${escape(message.sceneBreak)}</div>` : ''}<article class="message ${isUser ? 'user-message' : ''}" id="${escape(message.id)}" data-message-id="${escape(message.id)}"><span class="avatar ${color}" aria-hidden="true">${letter}</span><div class="message-body"><div class="message-head"><span class="message-author">${escape(message.author)}</span><span class="origin-tag ${isUser ? 'user' : ''}">${isUser ? '本人自寫' : message.author === '訪客' ? '示範人類 · 腳本' : '示範腳本'}</span><time class="message-time" datetime="${new Date(message.createdAt).toISOString()}">${clock(message.createdAt)}</time></div>${parent ? `<button class="reply-quote" data-action="jump" data-id="${escape(parent.id)}" aria-label="回到回覆來源">↳ ${escape(parent.author)}：${escape(excerpt(parent.text, 75))}</button>` : ''}<p class="message-text">${textMarkup(message.text)}</p>${linkNote}${delivery}<div class="message-actions"><button data-action="reply" data-id="${escape(message.id)}">↳ 回覆</button><button data-action="bookmark" data-id="${escape(message.id)}" aria-pressed="${bookmarked}">${bookmarked ? '▰ 已留著' : '⌑ 留這段'}</button><button data-action="question" data-id="${escape(message.id)}">◌ 暫放疑問</button></div></div></article>`;
+  return `${message.sceneBreak ? `<div class="scene-break">${escape(message.sceneBreak)}</div>` : ''}<article class="message ${isUser ? 'user-message' : ''}" id="${escape(message.id)}" data-message-id="${escape(message.id)}" tabindex="-1"><span class="avatar ${color}" aria-hidden="true">${letter}</span><div class="message-body"><div class="message-head"><span class="message-author">${escape(message.author)}</span><span class="origin-tag ${isUser ? 'user' : ''}">${isUser ? '本人自寫' : message.author === '訪客' ? '示範人類 · 腳本' : '示範腳本'}</span><time class="message-time" datetime="${new Date(message.createdAt).toISOString()}">${clock(message.createdAt)}</time></div>${parent ? `<button class="reply-quote" data-action="jump" data-id="${escape(parent.id)}" aria-label="回到回覆來源">↳ ${escape(parent.author)}：${escape(excerpt(parent.text, 75))}</button>` : ''}<p class="message-text">${textMarkup(message.text)}</p>${linkNote}${delivery}<div class="message-actions"><button data-action="reply" data-id="${escape(message.id)}">↳ 回覆</button><button data-action="bookmark" data-id="${escape(message.id)}" aria-pressed="${bookmarked}">${bookmarked ? '▰ 已留著' : '⌑ 留這段'}</button><button data-action="question" data-id="${escape(message.id)}">◌ 暫放疑問</button></div></div></article>`;
 }
 
 function renderMessages({ scroll = false } = {}) {
@@ -139,7 +139,11 @@ function jumpTo(id) {
   closeNotebook();
   const element = document.getElementById(id);
   if (!element || !element.matches('[data-message-id]')) return;
-  element.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  // The explicit return to a source completes this transient resume hint.
+  // Keep the source's identity and opening lines inside the reading viewport.
+  $('#resume-banner').hidden = true;
+  element.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  element.focus({ preventScroll: true });
   element.classList.add('highlight');
   setTimeout(() => element.classList.remove('highlight'), 1600);
 }
@@ -219,6 +223,8 @@ function sendMessage(event) {
   const backup = structuredClone(state.draft);
   const message = beginSend(state, { simulateDisconnect: $('#simulate-disconnect').checked });
   if (!message) return;
+  // A new turn supersedes the temporary return hint; retain every saved record.
+  $('#resume-banner').hidden = true;
   if (!persist()) {
     // Keep both the attempted message and original text in memory; never retry it.
     markUnknown(state, message.id);
@@ -247,11 +253,21 @@ document.addEventListener('click', (event) => {
     case 'reply':
       if (!message) return;
       setDraft(state, draft.value, id); persist(); renderControls(); draft.focus(); break;
-    case 'bookmark':
+    case 'bookmark': {
+      const fromNotebook = Boolean(action.closest('#notebook'));
+      const area = fromNotebook ? $('#bookmarks') : $('#messages');
+      const bookmarkButtons = () => [...area.querySelectorAll('button[data-action="bookmark"]')];
+      const previousIndex = bookmarkButtons().indexOf(action);
       setBookmarked(state, id);
       if (state.bookmarks.includes(id) && message) retainExcerpt(state, message);
       persist(); renderMessages(); renderNotebook(); wikiUI?.refresh();
+      const buttons = bookmarkButtons();
+      const nextFocus = buttons.find((button) => button.dataset.id === id)
+        ?? buttons[Math.min(Math.max(previousIndex, 0), buttons.length - 1)]
+        ?? (fromNotebook ? $('#close-notebook') : document.getElementById(id));
+      nextFocus?.focus({ preventScroll: true });
       notify(state.bookmarks.includes(id) ? '已收進「稍後回看」。' : '已取消回看，原訊息仍保留。'); break;
+    }
     case 'make-wiki':
       if (message) { closeNotebook(); wikiUI?.fromMessage(message); } break;
     case 'question': openQuestion(id); break;
@@ -335,7 +351,7 @@ conversation.addEventListener('scroll', () => {
   if (conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 50) $('#jump-latest').hidden = true;
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') closeNotebook();
+  if (event.key === 'Escape' && !document.querySelector('dialog[open]')) closeNotebook();
   if (event.key === 'Tab' && $('#notebook').classList.contains('open') && !document.querySelector('dialog[open]')) {
     const focusable = [...$('#notebook').querySelectorAll('button,summary')].filter((element) => element.getClientRects().length);
     const index = focusable.indexOf(document.activeElement);

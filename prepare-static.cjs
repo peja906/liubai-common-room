@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const root = __dirname;
-const files = ['index.html', 'styles.css', 'app.mjs', 'core.mjs', 'favicon.svg', 'wiki-core.mjs', 'wiki-ui.mjs', 'wiki.css'];
+const files = ['index.html', 'styles.css', 'app.mjs', 'core.mjs', 'favicon.svg', 'wiki-core.mjs', 'wiki-ui.mjs', 'wiki.css', 'relay.html', 'relay.css'];
 fs.rmSync(path.join(root, 'dist'), { recursive: true, force: true });
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
 for (const file of files) fs.copyFileSync(path.join(root, file), path.join(root, 'dist', file));

@@ -11,6 +11,7 @@ const files = {
   'app.mjs': 'text/javascript; charset=utf-8', 'core.mjs': 'text/javascript; charset=utf-8',
   'favicon.svg': 'image/svg+xml', 'wiki-core.mjs': 'text/javascript; charset=utf-8',
   'wiki-ui.mjs': 'text/javascript; charset=utf-8', 'wiki.css': 'text/css; charset=utf-8',
+  'relay.html': 'text/html; charset=utf-8', 'relay.css': 'text/css; charset=utf-8',
 };
 const assets = {};
 for (const [file, contentType] of Object.entries(files)) assets[`/${file}`] = { body: await readFile(join(root, file), 'utf8'), contentType };
